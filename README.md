@@ -1,12 +1,12 @@
 # Monsoon-Aware Solar Irradiance Forecasting — India
 
-Daily GHI forecasting across 8 Indian climate-zone stations using a 2-layer LSTM trained on NASA POWER meteorological reanalysis, IMD monsoon phase labels, and — in Phase 2 — MERRA-2 aerosol optical depth (AOD) as a novel atmospheric feature.
+Daily GHI forecasting across 8 Indian climate-zone stations using a three-phase deep learning pipeline: LSTM baseline (Phase 1), LSTM augmented with MERRA-2 aerosol optical depth (Phase 2), and a Transformer encoder with learned monsoon phase embeddings (Phase 3).
 
 ---
 
 ## Research Context
 
-India's solar energy potential varies dramatically across its heterogeneous climate zones, making single-model national forecasts unreliable; this project addresses that by training and evaluating station-specific models spanning arid (Jodhpur), semi-arid (Ahmedabad), tropical coastal (Mumbai, Chennai), and humid continental (Kolkata, Bhopal) regimes. The Phase 2 extension introduces MERRA-2 AOD at 550 nm (TOTEXTTAU) as a physically motivated aerosol feature — a variable absent from most solar forecasting benchmarks — alongside brightness temperature retrievals from ISRO INSAT-3DR and surface irradiance reanalysis from NASA POWER. This work is being prepared for submission to *Applied Energy* (Elsevier) / *Energy & AI* (Elsevier).
+India's solar energy potential varies dramatically across its heterogeneous climate zones, making single-model national forecasts unreliable; this project addresses that by training and evaluating station-specific models spanning arid (Jodhpur), semi-arid (Ahmedabad), tropical coastal (Mumbai, Chennai), and humid continental (Kolkata, Bhopal) regimes. Phase 2 introduces MERRA-2 AOD at 550 nm (TOTEXTTAU) as a physically motivated aerosol feature — a variable absent from most solar forecasting benchmarks — alongside surface irradiance reanalysis from NASA POWER and brightness temperature retrievals from ISRO INSAT-3DR. Phase 3 replaces the LSTM core with a Transformer encoder and routes the monsoon phase (0/1/2) through a learned `Embedding(3, 64)` that conditions every attention layer, representing the paper's second novel contribution. This work is being prepared for submission to *Applied Energy* (Elsevier) / *Energy & AI* (Elsevier).
 
 ---
 
@@ -15,19 +15,21 @@ India's solar energy potential varies dramatically across its heterogeneous clim
 ```
 solar_forecast/
 ├── data/
-│   ├── raw/                  ← place nasa-merra2_aod.txt here
-│   └── processed/            ← auto-generated CSVs
+│   ├── raw/
+│   │   └── nasa-merra2_aod.txt        ← OPeNDAP URL list (place here)
+│   └── processed/                     ← auto-generated CSVs
 ├── scripts/
-│   ├── fetch_nasa_power.py   ← Script 1: fetch GHI + met data
-│   ├── monsoon_labels.py     ← Script 2: generate phase labels
-│   ├── merge_dataset.py      ← Script 3: merge + feature engineering
-│   ├── baseline.py           ← Script 4: persistence baseline
-│   ├── lstm_model.py         ← Script 5: LSTM training
-│   └── fetch_merra2_aod.py   ← Script 6: fetch AOD (Phase 2)
-├── models/                   ← saved weights + scaler
-├── outputs/                  ← plots + metrics JSON
+│   ├── fetch_nasa_power.py            ← Script 1: fetch GHI + met data
+│   ├── monsoon_labels.py              ← Script 2: generate phase labels
+│   ├── merge_dataset.py               ← Script 3: merge + feature engineering
+│   ├── baseline.py                    ← Script 4: persistence baseline
+│   ├── lstm_model.py                  ← Script 5: Phase 1 LSTM
+│   ├── fetch_merra2_aod.py            ← Script 6: fetch MERRA-2 AOD
+│   ├── add_aod_retrain.py             ← Script 7: Phase 2 LSTM+AOD
+│   └── transformer_monsoon.py         ← Script 8: Phase 3 Transformer
+├── models/                            ← saved weights + scalers
+├── outputs/                           ← plots + metrics JSON
 ├── AGENTS.md
-├── .env                      ← credentials (never commit)
 ├── .gitignore
 ├── requirements.txt
 └── README.md
@@ -39,8 +41,8 @@ solar_forecast/
 
 - Python 3.10 or higher
 - `pip`
-- NASA Earthdata account (free registration) — required only for Script 6 (MERRA-2 AOD)
-- Active internet connection — required for Scripts 1 and 6 (API calls)
+- NASA Earthdata account (free) — required only for Script 6 (MERRA-2 AOD)
+- Active internet connection — required for Scripts 1 and 6
 
 ---
 
@@ -70,28 +72,36 @@ pip install -r requirements.txt
 
 ## Configuration
 
-### Credentials (.env)
+### NASA Earthdata credentials (~/.netrc)
 
-Scripts 1–5 require no credentials. Script 6 (`fetch_merra2_aod.py`) requires a NASA Earthdata login. Create a `.env` file in the project root:
+Scripts 1–5 and 7–8 require no credentials. Script 6 (`fetch_merra2_aod.py`) authenticates via `~/.netrc`. Create the file with:
 
 ```
-EARTHDATA_USER=your_username
-EARTHDATA_PASS=your_password
+machine urs.earthdata.nasa.gov
+    login YOUR_USERNAME
+    password YOUR_PASSWORD
+machine opendap.earthdata.nasa.gov
+    login YOUR_USERNAME
+    password YOUR_PASSWORD
 ```
 
-Register for a free account at [https://urs.earthdata.nasa.gov](https://urs.earthdata.nasa.gov). After registration, accept the MERRA-2 data usage licence through the Earthdata portal before running Script 6.
+Then restrict permissions:
 
-The `.env` file is listed in `.gitignore` and must never be committed to version control.
+```bash
+chmod 0600 ~/.netrc
+```
+
+Register for a free account at [https://urs.earthdata.nasa.gov](https://urs.earthdata.nasa.gov) and accept the MERRA-2 data licence before running Script 6.
 
 ### MERRA-2 Links File
 
-Script 6 reads a plain-text file of OPeNDAP URLs generated by the NASA GES DISC subsetter. Place the downloaded file at:
+Script 6 reads a plain-text file of OPeNDAP URLs generated by the NASA GES DISC subsetter. Place it at:
 
 ```
 data/raw/nasa-merra2_aod.txt
 ```
 
-To generate the file, navigate to the GES DISC dataset page, select the date range 2017-04-01 to 2024-12-31, the India bounding box (lat 8–37°N, lon 68–97°E), and variables `TOTEXTTAU`, `DUEXTTAU`, `BCEXTTAU`, `SSEXTTAU`, `SUEXTTAU`. Export the subset as an OPeNDAP URL list.
+Navigate to the GES DISC dataset page, select the date range 2017-04-01 to 2024-12-31, the India bounding box (lat 8–37°N, lon 68–97°E), and variables `TOTEXTTAU`, `DUEXTTAU`, `BCEXTTAU`, `SSEXTTAU`, `SUEXTTAU`. Export as an OPeNDAP URL list.
 
 Dataset page: [https://disc.gsfc.nasa.gov/datasets/M2T1NXAER_5.12.4/summary](https://disc.gsfc.nasa.gov/datasets/M2T1NXAER_5.12.4/summary)
 
@@ -102,8 +112,8 @@ Dataset page: [https://disc.gsfc.nasa.gov/datasets/M2T1NXAER_5.12.4/summary](htt
 | Source | Variables | Access |
 |---|---|---|
 | NASA POWER API | GHI (MJ/m²/day), temperature (°C), relative humidity (%), wind speed (m/s), cloud cover (%) | Free, no registration |
-| NASA MERRA-2 — GES DISC | TOTEXTTAU, DUEXTTAU, BCEXTTAU, SSEXTTAU, SUEXTTAU (AOD at 550 nm, dimensionless) | Free, Earthdata login required |
-| IMD (hardcoded) | Monsoon onset and withdrawal dates, 2016–2024, per station | Embedded in `monsoon_labels.py` |
+| NASA MERRA-2 — GES DISC | TOTEXTTAU, DUEXTTAU, BCEXTTAU, SSEXTTAU, SUEXTTAU (AOD at 550 nm) | Free, Earthdata login |
+| IMD (hardcoded) | Monsoon onset and withdrawal dates 2016–2024, per station | Embedded in `monsoon_labels.py` |
 
 **Stations and coordinates**
 
@@ -130,9 +140,9 @@ Dataset page: [https://disc.gsfc.nasa.gov/datasets/M2T1NXAER_5.12.4/summary](htt
 
 ## Usage
 
-Run scripts in order. Each script must complete successfully and produce its output file before the next script is started.
+Run scripts in order. Each script must complete and produce its output file before the next is started.
 
-### Phase 1 — Build baseline (no credentials required)
+### Phase 1 — LSTM baseline (no credentials required)
 
 ```bash
 # Script 1 — Fetch GHI + meteorological data from NASA POWER API
@@ -159,34 +169,72 @@ python scripts/baseline.py
 ```
 
 ```bash
-# Script 5 — Train 2-layer LSTM, evaluate against persistence baseline
+# Script 5 — Train Phase 1 LSTM, evaluate against persistence
 # Output: models/lstm_best.pt, models/scaler.pkl,
 #         outputs/metrics_lstm.json, outputs/loss_curve.png,
 #         outputs/predictions_sample.png
 python scripts/lstm_model.py
 ```
 
-### Phase 2 — Add AOD feature (Earthdata login required)
-
-Before running Script 6, ensure `.env` is configured and `data/raw/nasa-merra2_aod.txt` is in place.
+### Phase 2 — Add MERRA-2 AOD (Earthdata login required)
 
 ```bash
 # Script 6 — Fetch MERRA-2 AOD via OPeNDAP (2,832 daily files)
+# Retries with exponential backoff; session refreshed every 50 requests
 # Output: data/processed/merra2_aod_stations.csv
-# Note: checkpoints saved every 100 files; Ctrl+C saves progress
 python scripts/fetch_merra2_aod.py
+```
+
+```bash
+# Script 7 — Retrain LSTM with 15 features (10 base + 5 AOD)
+# Fills missing AOD with station-wise mean + forward fill
+# Output: models/lstm_aod_best.pt, models/scaler_aod.pkl,
+#         outputs/metrics_lstm_aod.json, outputs/loss_curve_aod.png,
+#         outputs/comparison_aod.png
+python scripts/add_aod_retrain.py
+```
+
+### Phase 3 — Transformer with monsoon embedding (no new data required)
+
+```bash
+# Script 8 — Train Transformer encoder with learned monsoon phase embedding
+# Output: models/transformer_best.pt, models/scaler_transformer.pkl,
+#         outputs/metrics_transformer.json, outputs/loss_curve_transformer.png,
+#         outputs/comparison_final.png
+python scripts/transformer_monsoon.py
 ```
 
 ### Model details
 
-The LSTM (Script 5) uses the following 10 input features in order:
+**Phase 1 — LSTM (no AOD)**
 
+Input features (10): `ghi`, `temperature`, `humidity`, `wind_speed`, `cloud_cover`, `monsoon_phase`, `doy_sin`, `doy_cos`, `month_sin`, `month_cos`
+
+Architecture: 2 LSTM layers, hidden size 128, dropout 0.2, sequence length 7 days, FC output. Optimiser: Adam lr=0.001, gradient clip 1.0. Scheduler: ReduceLROnPlateau patience=5. Early stopping: patience=10 on CPU-evaluated val loss.
+
+**Phase 2 — LSTM+AOD**
+
+Input features (15): Phase 1 features + `TOTEXTTAU`, `DUEXTTAU`, `BCEXTTAU`, `SSEXTTAU`, `SUEXTTAU`
+
+Same LSTM architecture as Phase 1, `input_size` updated to 15. Missing AOD values filled with station-wise daily mean, forward-filled as fallback. New scaler fitted on training split only (`scaler_aod.pkl`).
+
+**Phase 3 — Transformer + Monsoon Embedding**
+
+Input features (14 continuous): Phase 2 features minus `monsoon_phase` (handled separately).
+Monsoon phase: `Embedding(3, 64)` — one learned 64-dim vector per phase, added elementwise to the projected input at each timestep.
+
+Architecture:
 ```
-ghi, temperature, humidity, wind_speed, cloud_cover,
-monsoon_phase, doy_sin, doy_cos, month_sin, month_cos
+Linear(14 → 64) + Embedding(3, 64)  →  ADD
+↓
+Sinusoidal positional encoding
+↓
+TransformerEncoder: 2 layers × 4 heads, dim_ff=128, dropout=0.1
+↓
+Last timestep → Linear(64 → 1)
 ```
 
-Architecture: 2 LSTM layers, hidden size 128, dropout 0.2, sequence length 30 days, FC output layer. Target: next-day GHI. Optimiser: Adam, lr 0.001. Scheduler: ReduceLROnPlateau, patience 5, factor 0.5. Early stopping: patience 10 epochs on validation loss. Features scaled with `MinMaxScaler` fitted on the training split only.
+Optimiser: Adam lr=0.0005, gradient clip 1.0. All other training settings identical to Phase 1.
 
 ---
 
@@ -197,13 +245,23 @@ Architecture: 2 LSTM layers, hidden size 128, dropout 0.2, sequence length 30 da
 | `nasa_power_all_stations.csv` | `data/processed/` | GHI + met variables, 8 stations, daily 2017–2024 |
 | `monsoon_phases.csv` | `data/processed/` | Per-station per-day monsoon phase labels (0/1/2) |
 | `dataset_final.csv` | `data/processed/` | Merged training-ready dataset, 19 columns, ~22,656 rows |
-| `metrics_persistence.json` | `outputs/` | Persistence baseline MAE, RMSE, R², skill score per station per split |
-| `metrics_lstm.json` | `outputs/` | LSTM model MAE, RMSE, R² on test set per station |
-| `loss_curve.png` | `outputs/` | Train vs validation MSE loss per epoch |
-| `predictions_sample.png` | `outputs/` | Actual vs predicted GHI — Chennai, test year 2024 |
-| `lstm_best.pt` | `models/` | Best LSTM weights (lowest validation loss) |
-| `scaler.pkl` | `models/` | Fitted MinMaxScaler (training split only) — required for inference |
-| `merra2_aod_stations.csv` | `data/processed/` | Daily mean AOD, 8 stations × 5 variables (Phase 2) |
+| `merra2_aod_stations.csv` | `data/processed/` | Daily mean AOD, 8 stations × 5 variables |
+| `metrics_persistence.json` | `outputs/` | Persistence baseline MAE, RMSE, R², skill score |
+| `metrics_lstm.json` | `outputs/` | Phase 1 LSTM test metrics — **do not overwrite** |
+| `metrics_lstm_aod.json` | `outputs/` | Phase 2 LSTM+AOD test metrics |
+| `metrics_transformer.json` | `outputs/` | Phase 3 Transformer test metrics |
+| `loss_curve.png` | `outputs/` | Phase 1 train vs val loss |
+| `loss_curve_aod.png` | `outputs/` | Phase 2 train vs val loss |
+| `loss_curve_transformer.png` | `outputs/` | Phase 3 train vs val loss |
+| `predictions_sample.png` | `outputs/` | Phase 1 actual vs predicted — Chennai 2024 |
+| `comparison_aod.png` | `outputs/` | Phase 2 three-way bar chart: Persistence / LSTM / LSTM+AOD |
+| `comparison_final.png` | `outputs/` | Phase 3 four-way bar chart: all models per station |
+| `lstm_best.pt` | `models/` | Phase 1 best weights |
+| `lstm_aod_best.pt` | `models/` | Phase 2 best weights |
+| `transformer_best.pt` | `models/` | Phase 3 best weights |
+| `scaler.pkl` | `models/` | Phase 1 MinMaxScaler (10 features, train only) |
+| `scaler_aod.pkl` | `models/` | Phase 2 MinMaxScaler (15 features, train only) |
+| `scaler_transformer.pkl` | `models/` | Phase 3 MinMaxScaler (14 features, train only) |
 
 `dataset_final.csv` column schema:
 
@@ -223,14 +281,13 @@ doy_sin, doy_cos, month_sin, month_cos
 | Language | Python 3.10+ |
 | Deep learning | PyTorch 2.x (CUDA / MPS / CPU auto-selected) |
 | Data processing | pandas, numpy |
-| Satellite / reanalysis I/O | netCDF4, h5py, pyproj |
+| Satellite / reanalysis I/O | netCDF4 |
 | API requests | requests |
 | ML utilities | scikit-learn, joblib |
-| Visualisation | matplotlib, seaborn |
-| Environment | python-dotenv |
-| GPU support | CUDA (NVIDIA, e.g. RTX 4090) and MPS (Apple Silicon) |
+| Visualisation | matplotlib |
+| GPU support | CUDA (NVIDIA RTX 4090) and MPS (Apple Silicon) |
 
-Device selection is automatic:
+Device selection is automatic in every training script:
 
 ```python
 if torch.cuda.is_available():
@@ -240,6 +297,8 @@ elif torch.backends.mps.is_available():
 else:
     DEVICE = torch.device('cpu')
 ```
+
+All validation and test evaluation loops run on CPU regardless of training device to avoid an Apple Silicon MPS inference artifact that causes `torch.no_grad()` passes to report ~2.5× lower loss than the true value.
 
 ---
 
