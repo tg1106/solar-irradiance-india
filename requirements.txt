@@ -1,0 +1,13 @@
+requests
+pandas
+numpy
+torch
+scikit-learn
+joblib
+matplotlib
+seaborn
+netCDF4
+h5py
+pyproj
+python-dotenv
+multiprocessing-logging

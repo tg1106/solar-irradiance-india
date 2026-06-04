@@ -1,0 +1,7 @@
+python3 scripts/fetch_nasa_power.py
+python3 scripts/monsoon_labels.py
+python3 scripts/merge_dataset.py
+python3 scripts/baseline.py
+python3 scripts/lstm_model.py
+python3 scripts/fetch_merra2_aod.py
+python3 scripts/add_aod_retrain.py
