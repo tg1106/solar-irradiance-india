@@ -49,7 +49,8 @@ MODEL_PATH       = ROOT / 'models'  / 'transformer_best.pt'
 SCALER_PATH      = ROOT / 'models'  / 'scaler_transformer.pkl'
 METRICS_JSON     = ROOT / 'outputs' / 'metrics_transformer.json'
 LOSS_CURVE_PNG   = ROOT / 'outputs' / 'loss_curve_transformer.png'
-COMPARISON_PNG   = ROOT / 'outputs' / 'comparison_final.png'
+COMPARISON_PNG              = ROOT / 'outputs' / 'comparison_final.png'
+PREDICTIONS_TRANSFORMER_PNG = ROOT / 'outputs' / 'predictions_transformer_chennai.png'
 
 # ── Data constants ─────────────────────────────────────────────────────────────
 TRAIN_START = "2017-04-01"
@@ -556,6 +557,105 @@ def plot_four_way_comparison(
     print(f"  Saved → {COMPARISON_PNG}")
 
 
+def plot_predictions_sample_transformer(
+    df_test: pd.DataFrame,
+    scaler: MinMaxScaler,
+) -> None:
+    """Generate prediction sample plot for Chennai test 2024.
+
+    Loads transformer_best.pt, runs sliding-window inference on CPU
+    (MPS fix), inverse-transforms to MJ/m²/day, and saves a line plot
+    of actual vs predicted GHI for the Chennai station.
+
+    Args:
+        df_test: Scaled test DataFrame (all stations; must contain 'date',
+                 'station', FEATURE_COLS, MONSOON_COL, TARGET_COL).
+        scaler:  Fitted MinMaxScaler (scaler_transformer.pkl) used to
+                 inverse-transform GHI predictions and actuals.
+    """
+    print("\nStep 15 — Prediction sample plot for Chennai 2024 ...")
+
+    # Load best model on CPU — avoids MPS inference artifact
+    model_plot = SolarTransformer(
+        input_size=INPUT_SIZE,
+        d_model=D_MODEL,
+        n_heads=N_HEADS,
+        n_layers=N_LAYERS,
+        dim_ff=DIM_FF,
+        dropout=DROPOUT,
+    )
+    model_plot.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device('cpu')))
+    model_plot.eval()
+    eval_device = torch.device('cpu')
+    model_plot   = model_plot.to(eval_device)
+
+    # Filter to Chennai only, sorted by date
+    chennai = (
+        df_test[df_test['station'] == 'Chennai']
+        .sort_values('date')
+        .reset_index(drop=True)
+    )
+    print(f"  Chennai test rows: {len(chennai)}")
+
+    feats    = chennai[FEATURE_COLS].to_numpy(dtype=np.float32)
+    moon_arr = chennai[MONSOON_COL].fillna(0).astype('int64').to_numpy()
+    tgts     = chennai[TARGET_COL].to_numpy(dtype=np.float32)
+    dates    = chennai['date'].to_numpy()
+    ghi_idx  = FEATURE_COLS.index('ghi')
+    n        = len(chennai)
+
+    pred_dates:  list[pd.Timestamp] = []
+    actuals:     list[float]        = []
+    predictions: list[float]        = []
+
+    with torch.no_grad():
+        for i in range(n - SEQ_LEN):
+            x_feat = feats[i: i + SEQ_LEN]
+            x_moon = moon_arr[i: i + SEQ_LEN]
+            y_true = tgts[i + SEQ_LEN - 1]
+            if np.isnan(x_feat).any() or np.isnan(y_true):
+                continue
+
+            xf_t = torch.tensor(x_feat, dtype=torch.float32).unsqueeze(0).to(eval_device)
+            xm_t = torch.tensor(x_moon, dtype=torch.long).unsqueeze(0).to(eval_device)
+            yp   = model_plot(xf_t, xm_t).numpy().flatten()[0]
+
+            # Inverse transform prediction
+            dummy_p = np.zeros((1, len(FEATURE_COLS)), dtype=np.float32)
+            dummy_p[0, ghi_idx] = yp
+            y_pred_inv = scaler.inverse_transform(dummy_p)[0, ghi_idx]
+
+            # Inverse transform actual (target scaled identically to GHI feature)
+            dummy_a = np.zeros((1, len(FEATURE_COLS)), dtype=np.float32)
+            dummy_a[0, ghi_idx] = y_true
+            y_actual_inv = scaler.inverse_transform(dummy_a)[0, ghi_idx]
+
+            pred_dates.append(pd.Timestamp(dates[i + SEQ_LEN - 1]))
+            actuals.append(y_actual_inv)
+            predictions.append(y_pred_inv)
+
+    print(f"  Valid inference windows: {len(pred_dates)}")
+
+    if not pred_dates:
+        print("  WARNING: no valid Chennai windows — skipping plot.")
+        return
+
+    fig, ax = plt.subplots(figsize=(14, 5))
+    ax.plot(pred_dates, actuals,     color='steelblue',  linestyle='-',
+            linewidth=1.2, label='Actual GHI')
+    ax.plot(pred_dates, predictions, color='darkorange', linestyle='--',
+            linewidth=1.2, label='Predicted GHI')
+    ax.set_title('Transformer+AOD Predictions vs Actual — Chennai Test 2024')
+    ax.set_xlabel('Date')
+    ax.set_ylabel('GHI (MJ/m²/day)')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(PREDICTIONS_TRANSFORMER_PNG, dpi=150)
+    plt.close(fig)
+    print(f"  Saved → {PREDICTIONS_TRANSFORMER_PNG}")
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -1019,6 +1119,9 @@ def main() -> None:
             {s: lstm_aod_rmse[s] for s in stations_sorted if s in lstm_aod_rmse},
             {s: test_metrics[s]['rmse'] for s in stations_sorted},
         )
+
+    # ── Step 15: Prediction sample plot for Chennai 2024 ─────────────────────
+    plot_predictions_sample_transformer(df_test, scaler)
 
     # ── SELF CHECK ──────────────────────────────────────────────────────────────
     print(f"\n{'='*65}")
