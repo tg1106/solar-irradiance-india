@@ -12,3 +12,4 @@ Thumbs.db
 *.ipynb_checkpoints
 test_aod*.nc4
 publication/
+AGENTS.md
