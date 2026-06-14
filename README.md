@@ -1,12 +1,12 @@
-# Monsoon-Aware Solar Irradiance Forecasting — India
+# Monsoon-Aware Solar Irradiance Forecasting & Hybrid Solar-Wind Generation — India
 
-Daily GHI forecasting across 8 Indian climate-zone stations using a three-phase deep learning pipeline: LSTM baseline (Phase 1), LSTM augmented with MERRA-2 aerosol optical depth (Phase 2), and a Transformer encoder with learned monsoon phase embeddings (Phase 3).
+Daily GHI forecasting across 8 Indian climate-zone stations using a three-phase deep learning pipeline: LSTM baseline (Phase 1), LSTM augmented with MERRA-2 aerosol optical depth (Phase 2), and a Transformer encoder with learned monsoon phase embeddings (Phase 3). Phase B builds on the trained Transformer to derive a hybrid Solar-Wind Relative Generation Index (RGI) and the optimal solar:wind capacity mix per station.
 
 ---
 
 ## Research Context
 
-India's solar energy potential varies dramatically across its heterogeneous climate zones, making single-model national forecasts unreliable; this project addresses that by training and evaluating station-specific models spanning arid (Jodhpur), semi-arid (Ahmedabad), tropical coastal (Mumbai, Chennai), and humid continental (Kolkata, Bhopal) regimes. Phase 2 introduces MERRA-2 AOD at 550 nm (TOTEXTTAU) as a physically motivated aerosol feature — a variable absent from most solar forecasting benchmarks — alongside surface irradiance reanalysis from NASA POWER and brightness temperature retrievals from ISRO INSAT-3DR. Phase 3 replaces the LSTM core with a Transformer encoder and routes the monsoon phase (0/1/2) through a learned `Embedding(3, 64)` that conditions every attention layer, representing the paper's second novel contribution. This work is being prepared for submission to *Applied Energy* (Elsevier) / *Energy & AI* (Elsevier).
+India's solar energy potential varies dramatically across its heterogeneous climate zones, making single-model national forecasts unreliable; this project addresses that by training and evaluating station-specific models spanning arid (Jodhpur), semi-arid (Ahmedabad), tropical coastal (Mumbai, Chennai), and humid continental (Kolkata, Bhopal) regimes. Phase 2 introduces MERRA-2 AOD at 550 nm (TOTEXTTAU) as a physically motivated aerosol feature — a variable absent from most solar forecasting benchmarks — alongside surface irradiance reanalysis from NASA POWER and brightness temperature retrievals from ISRO INSAT-3DR. Phase 3 replaces the LSTM core with a Transformer encoder and routes the monsoon phase (0/1/2) through a learned `Embedding(3, 64)` that conditions every attention layer, representing the paper's second novel contribution. Phase B is the project's third novel contribution: it converts forecasted GHI and 50m wind speed into a physics-based Solar RGI and Wind RGI, then searches for the per-station solar:wind capacity split that maximises mean generation while minimising variance — testing whether solar and wind generation are seasonally complementary (e.g. monsoon winds compensating for monsoon cloud cover). This work is being prepared for submission to *Applied Energy* (Elsevier) / *Energy & AI* (Elsevier).
 
 ---
 
@@ -26,7 +26,11 @@ solar_forecast/
 │   ├── lstm_model.py                  ← Script 5: Phase 1 LSTM
 │   ├── fetch_merra2_aod.py            ← Script 6: fetch MERRA-2 AOD
 │   ├── add_aod_retrain.py             ← Script 7: Phase 2 LSTM+AOD
-│   └── transformer_monsoon.py         ← Script 8: Phase 3 Transformer
+│   ├── transformer_monsoon.py         ← Script 8: Phase 3 Transformer
+│   ├── fetch_extended_power.py        ← Phase B Step 1: fetch PS + WS50M
+│   ├── compute_rgi.py                 ← Phase B Step 2: Solar/Wind RGI physics
+│   ├── optimize_mix.py                ← Phase B Step 3: optimal solar:wind mix
+│   └── forecast_generation.py         ← Phase B Step 4: hybrid generation forecast
 ├── models/                            ← saved weights + scalers
 ├── outputs/                           ← plots + metrics JSON
 ├── AGENTS.md
@@ -204,6 +208,41 @@ python scripts/add_aod_retrain.py
 python scripts/transformer_monsoon.py
 ```
 
+### Phase B — Hybrid Solar-Wind Generation (no new credentials required)
+
+Builds on the trained Phase 3 Transformer and the existing monsoon labels. Run in order; each script consumes the previous script's output.
+
+```bash
+# Phase B Step 1 — Re-fetch NASA POWER with surface pressure (PS) and
+# 50m wind speed (WS50M) added to the original 5 parameters
+# Output: data/processed/nasa_power_extended.csv
+python scripts/fetch_extended_power.py
+```
+
+```bash
+# Phase B Step 2 — Convert GHI and 50m wind speed to Solar RGI / Wind RGI
+# using a PV efficiency model and a turbine power-curve model
+# Output: data/processed/rgi_dataset.csv
+python scripts/compute_rgi.py
+```
+
+```bash
+# Phase B Step 3 — Sweep solar:wind capacity fractions 0-100% per station
+# to find the mix maximising mean/std (generation/stability) ratio
+# Output: outputs/optimal_mix.csv, outputs/mix_chart.png,
+#         outputs/mix_sweep_curves.png
+python scripts/optimize_mix.py
+```
+
+```bash
+# Phase B Step 4 — Forecast 2024 GHI with the Phase 3 Transformer,
+# forecast wind via persistence, convert both to RGI, and blend using
+# each station's optimal mix
+# Output: outputs/generation_forecasts.csv, outputs/generation_trends.png,
+#         outputs/metrics_generation.json
+python scripts/forecast_generation.py
+```
+
 ### Model details
 
 **Phase 1 — LSTM (no AOD)**
@@ -236,6 +275,18 @@ Last timestep → Linear(64 → 1)
 
 Optimiser: Adam lr=0.0005, gradient clip 1.0. All other training settings identical to Phase 1.
 
+**Phase B — Hybrid Solar-Wind RGI**
+
+No new model is trained — Phase B is a physics + optimisation layer on top of the Phase 3 Transformer.
+
+*Solar RGI* — daily GHI converted to a [0, 1] generation index using a PV efficiency model with a temperature-coefficient derate (18% panel efficiency, -0.4%/°C above 25°C reference, normalised to an empirical clear-sky max of 8 MJ/m²/day).
+
+*Wind RGI* — 50m wind speed converted to a [0, 1] generation index using a standard turbine power curve (cut-in 3 m/s, rated 12 m/s, cut-out 25 m/s) with an air-density correction from surface pressure and temperature (ρ = P / R·T).
+
+*Optimal mix* — for each station, solar fraction is swept 0–100% in 1% steps; the fraction maximising mean(combined RGI) / std(combined RGI) is selected as the optimal capacity split. The sweep is repeated separately for active-monsoon and non-monsoon rows to test whether the optimal mix shifts seasonally.
+
+*Generation forecast* — Solar RGI is computed from the Transformer's forecasted GHI (Phase 3); Wind RGI uses a 1-day persistence forecast of 50m wind speed (wind forecasting is out of scope — noted as a limitation). Both are blended using the station's optimal mix and compared against the RGI computed from actual GHI/wind.
+
 ---
 
 ## Output Files
@@ -262,6 +313,14 @@ Optimiser: Adam lr=0.0005, gradient clip 1.0. All other training settings identi
 | `scaler.pkl` | `models/` | Phase 1 MinMaxScaler (10 features, train only) |
 | `scaler_aod.pkl` | `models/` | Phase 2 MinMaxScaler (15 features, train only) |
 | `scaler_transformer.pkl` | `models/` | Phase 3 MinMaxScaler (14 features, train only) |
+| `nasa_power_extended.csv` | `data/processed/` | GHI + met + surface pressure + 50m wind speed, 8 stations, daily 2017–2024 |
+| `rgi_dataset.csv` | `data/processed/` | Daily Solar RGI + Wind RGI + combined RGI per station |
+| `optimal_mix.csv` | `outputs/` | Optimal / max-gen / min-var / monsoon-split solar:wind % per station |
+| `generation_forecasts.csv` | `outputs/` | Actual vs forecasted combined RGI, 2024 test set |
+| `metrics_generation.json` | `outputs/` | Per-station MAE/RMSE on forecasted combined RGI |
+| `mix_chart.png` | `outputs/` | Bar chart: optimal solar/wind % per station |
+| `mix_sweep_curves.png` | `outputs/` | Generation/stability ratio vs solar fraction, all stations |
+| `generation_trends.png` | `outputs/` | 2×2 actual vs forecasted combined RGI (Jodhpur, Chennai, Kolkata, Bengaluru) |
 
 `dataset_final.csv` column schema:
 
@@ -271,6 +330,43 @@ monsoon_phase, phase_name, day_of_year, month, year,
 ghi_lag1, ghi_lag7, ghi_rolling7,
 doy_sin, doy_cos, month_sin, month_cos
 ```
+
+`rgi_dataset.csv` column schema:
+
+```
+date, station, ghi, temperature, wind_speed_50m, surface_pressure,
+solar_rgi, wind_rgi,
+combined_rgi_50_50, combined_rgi_70_30, combined_rgi_30_70,
+monsoon_phase, air_density
+```
+
+`optimal_mix.csv` column schema:
+
+```
+station, climate_zone,
+optimal_solar_pct, optimal_wind_pct,
+max_gen_solar_pct, max_gen_wind_pct,
+min_var_solar_pct, min_var_wind_pct,
+monsoon_solar_pct, monsoon_wind_pct,
+nonmonsoon_solar_pct, nonmonsoon_wind_pct,
+mean_combined_rgi_at_optimal, std_combined_rgi_at_optimal,
+mean_solar_only_rgi, mean_wind_only_rgi
+```
+
+### Phase B key result — optimal solar:wind mix per station
+
+| Station | Optimal Solar% | Optimal Wind% | Mean RGI | Std RGI |
+|---|---:|---:|---:|---:|
+| Jodhpur | 100.0% | 0.0% | 0.6675 | 0.1576 |
+| Hyderabad | 67.0% | 33.0% | 0.4575 | 0.0955 |
+| Kolkata | 66.0% | 34.0% | 0.3855 | 0.1037 |
+| Bengaluru | 65.0% | 35.0% | 0.4722 | 0.0929 |
+| Bhopal | 62.0% | 38.0% | 0.4166 | 0.1168 |
+| Ahmedabad | 60.0% | 40.0% | 0.4297 | 0.1029 |
+| Chennai | 52.0% | 48.0% | 0.3707 | 0.0815 |
+| Mumbai | 50.0% | 50.0% | 0.3598 | 0.0781 |
+
+With the turbine constants used (rated speed 12 m/s) against typical 50m wind speeds (~5 m/s mean across all 8 stations), Wind RGI is small relative to Solar RGI everywhere, so the generation/stability-optimal mix is solar-dominant at every station. The monsoon-vs-non-monsoon split still shows the expected seasonal complementarity shift (e.g. Bhopal: 51% solar in active monsoon vs 100% non-monsoon).
 
 ---
 
