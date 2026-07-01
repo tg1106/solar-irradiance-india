@@ -255,6 +255,16 @@ Phase B (added — complete):
 11. forecast_generation.py   → generation_forecasts.csv
                                 + generation_trends.png
                                 + metrics_generation.json        [DONE]
+12. wind_transformer.py      → wind_transformer_best.pt
+                                + scaler_wind.pkl
+                                + metrics_wind_persistence.json
+                                + metrics_wind_transformer.json
+                                + loss_curve_wind.png
+                                + comparison_wind.png
+                                + predictions_wind_jodhpur.png   [DONE]
+13. forecast_generation_v2.py → generation_forecasts_v2.csv
+                                + generation_trends_v2.png
+                                + metrics_generation_v2.json     [DONE]
 
 
 

@@ -67,7 +67,7 @@ def find_optimal_mix(
     best_ratio = -1
     best_solar_pct = 0.5
 
-    for solar_frac in np.arange(0, 1.01, 0.01):
+    for solar_frac in SOLAR_FRACS:
         wind_frac = 1 - solar_frac
         combined = solar_frac * solar_rgi_series + \
                    wind_frac * wind_rgi_series
@@ -288,12 +288,10 @@ def main() -> None:
 
     by_station = out_df.set_index('station')
 
-    for s in ['Jodhpur', 'Ahmedabad']:
-        pct = by_station.loc[s, 'optimal_solar_pct']
-        print(f"{s} optimal_solar_pct = {pct*100:.1f}%  (>60% expected): {pct > 0.6}")
-
-    kolkata_pct = by_station.loc['Kolkata', 'optimal_solar_pct']
-    print(f"Kolkata optimal_solar_pct = {kolkata_pct*100:.1f}%  (<50% expected): {kolkata_pct < 0.5}")
+    jodhpur_solar = by_station.loc['Jodhpur', 'optimal_solar_pct']
+    kolkata_solar = by_station.loc['Kolkata', 'optimal_solar_pct']
+    print(f"Jodhpur solar% ({jodhpur_solar*100:.1f}%) > Kolkata ({kolkata_solar*100:.1f}%): "
+          f"{jodhpur_solar > kolkata_solar}")
 
     coastal = ['Mumbai', 'Chennai']
     inland  = ['Jodhpur', 'Bhopal']

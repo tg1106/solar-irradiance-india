@@ -77,7 +77,7 @@ TARGET_COL  = 'ghi_target'
 
 AOD_VARS: list[str] = ['TOTEXTTAU', 'DUEXTTAU', 'BCEXTTAU', 'SSEXTTAU', 'SUEXTTAU']
 HIGH_AOD_THRESHOLD: float = 0.4
-FILL_THRESHOLD:     float = 1e14   # MERRA-2 fill proxy (spec 1e15)
+FILL_THRESHOLD:     float = 1e15   # MERRA-2 official fill value
 
 PHASE_NAMES = {0: 'pre_monsoon', 1: 'active_monsoon', 2: 'post_monsoon'}
 

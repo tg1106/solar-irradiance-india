@@ -7,7 +7,4 @@ joblib
 matplotlib
 seaborn
 netCDF4
-h5py
-pyproj
 python-dotenv
-multiprocessing-logging

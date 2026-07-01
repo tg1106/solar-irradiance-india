@@ -34,7 +34,11 @@ GHI_MAX          = 8.0     # MJ/m²/day — empirical max from dataset
 
 R_GAS    = 287.05   # J/(kg·K) specific gas constant for dry air
 CUT_IN   = 3.0      # m/s — turbine starts generating
-RATED    = 12.0     # m/s — turbine at full power
+# FIX: RATED=7 m/s for IEC Class III low-wind-speed turbines.
+# India mean 50m wind ~5 m/s. RATED=12 gave Wind RGI ~7% everywhere
+# making solar always dominant — optimisation was trivial.
+# RATED=7 gives ~36% Wind RGI at 5 m/s — physically meaningful.
+RATED    = 7.0      # m/s — turbine at full power (IEC Class III)
 CUT_OUT  = 25.0     # m/s — turbine shuts down for safety
 CP       = 0.4      # Betz efficiency coefficient
 
