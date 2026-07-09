@@ -265,6 +265,8 @@ Phase B (added — complete):
 13. forecast_generation_v2.py → generation_forecasts_v2.csv
                                 + generation_trends_v2.png
                                 + metrics_generation_v2.json     [DONE]
+14. ev_demand_matching.py    → ev_demand_matching.csv
+                                + ev_capacity_relief.png         [DONE]
 
 
 
